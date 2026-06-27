@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ocr-pipeline"
+version = "0.1.0"
+description = "Watch an Obsidian vault and transcribe handwritten PDFs to Markdown via the OpenAI API."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "openai>=1.40",
+    "httpx[socks]>=0.27",
+    "langgraph>=0.2",
+    "watchdog>=4.0",
+    "pypdf>=4.2",
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    "structlog>=24.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+ocr-pipeline = "ocr_pipeline.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
