@@ -5,8 +5,10 @@ from pathlib import Path
 from ocr_pipeline.hashing import md5_of_file
 from ocr_pipeline.mdfile import (
     build_document,
+    instructions_hash,
     is_stale,
     md_path_for,
+    read_instructions,
     read_recorded_hash,
     write_md,
 )
@@ -70,3 +72,58 @@ def test_is_stale_after_pdf_changes(pdf_factory, tmp_path):
     # Mutate the PDF bytes -> recorded hash no longer matches.
     pdf.write_bytes(pdf.read_bytes() + b"%extra")
     assert is_stale(pdf) is True
+
+
+# -- instructions ---------------------------------------------------------------
+
+
+def test_write_md_with_instructions_round_trip(pdf_factory):
+    pdf = pdf_factory("a.pdf")
+    md = write_md(pdf, "body text", instructions="Treat 'foo' as a header.")
+    assert read_instructions(md) == "Treat 'foo' as a header."
+    text = md.read_text(encoding="utf-8")
+    assert "## OCR Instructions" in text
+    assert "Treat 'foo' as a header." in text
+    # Header records the instruction hash, and the file is fresh right after writing.
+    assert instructions_hash("Treat 'foo' as a header.") in text.splitlines()[0]
+    assert is_stale(pdf) is False
+
+
+def test_read_instructions_none_when_absent(pdf_factory):
+    pdf = pdf_factory("a.pdf")
+    md = write_md(pdf, "body")  # no instructions
+    assert read_instructions(md) is None
+
+
+def test_is_stale_when_instructions_added_to_fresh_file(pdf_factory):
+    pdf = pdf_factory("a.pdf")
+    write_md(pdf, "body")  # fresh, no instructions
+    assert is_stale(pdf) is False
+    # User appends an instructions section by hand -> hash mismatch -> stale.
+    md = md_path_for(pdf)
+    md.write_text(
+        md.read_text(encoding="utf-8") + "\n## OCR Instructions\n\nfix the date\n",
+        encoding="utf-8",
+    )
+    assert is_stale(pdf) is True
+
+
+def test_is_stale_when_instructions_edited(pdf_factory):
+    pdf = pdf_factory("a.pdf")
+    write_md(pdf, "body", instructions="original note")
+    assert is_stale(pdf) is False
+    md = md_path_for(pdf)
+    md.write_text(
+        md.read_text(encoding="utf-8").replace("original note", "changed note"),
+        encoding="utf-8",
+    )
+    assert is_stale(pdf) is True
+
+
+def test_build_document_strips_echoed_instructions_from_body():
+    body = "real content\n\n## OCR Instructions\n\nmodel echoed this"
+    doc = build_document("0" * 32, body, instructions="the real instruction")
+    # Only one instructions section, containing the real instruction (not the echo).
+    assert doc.count("## OCR Instructions") == 1
+    assert "the real instruction" in doc
+    assert "model echoed this" not in doc

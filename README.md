@@ -29,6 +29,25 @@ PDF's current bytes.
 
 Processing is **serial**: at most one OpenAI job runs at a time.
 
+## Correcting a transcription
+
+When a transcription has mistakes, you don't have to re-do anything by hand. Add an
+instructions section at the **end** of the `.md` file:
+
+```markdown
+## OCR Instructions
+
+- The diagram on page 2 is a UML sequence diagram, not a flowchart.
+- "Пётр" is a proper name — keep the capitalization.
+```
+
+On save, the service notices the change (the `instr:` hash in the first line no longer
+matches), re-runs recognition for that PDF with your notes appended to the system prompt,
+and rewrites the `.md` — **keeping your instructions section intact** so it keeps applying
+on future passes. Editing the `.md` alone is enough to trigger a rerun; the PDF doesn't
+need to change. Writing the file back does not cause a loop, because once written the
+recorded hashes match the file again.
+
 ## Usage
 
 ```bash

@@ -13,7 +13,7 @@ import structlog
 
 from ..config import Settings
 from ..hashing import md5_of_file
-from ..mdfile import write_md
+from ..mdfile import md_path_for, read_instructions, write_md
 from ..pdfutil import split_pdf
 from .openai_client import Recognizer
 
@@ -27,6 +27,7 @@ class PipelineState(TypedDict, total=False):
     pdf_path: str
     work_dir: str
     pdf_hash: str
+    instructions: str | None
     chunks: list[str]
     parts: list[str]
     body: str
@@ -37,9 +38,14 @@ def validate_node(state: PipelineState, *, settings: Settings) -> PipelineState:
     pdf_path = Path(state["pdf_path"])
     if not pdf_path.is_file():
         raise FileNotFoundError(f"PDF disappeared before processing: {pdf_path}")
+    # Carry forward any human correction instructions from the existing .md so they feed
+    # this pass and are re-appended afterwards.
+    instructions = read_instructions(md_path_for(pdf_path))
+    if instructions:
+        log.info("using_instructions", pdf=str(pdf_path), chars=len(instructions))
     # Hash the current bytes up front; the write step reuses it so the recorded MD5
     # matches the bytes we actually transcribed.
-    return {"pdf_hash": md5_of_file(pdf_path)}
+    return {"pdf_hash": md5_of_file(pdf_path), "instructions": instructions}
 
 
 def split_node(state: PipelineState, *, settings: Settings) -> PipelineState:
@@ -60,10 +66,11 @@ def recognize_node(
     state: PipelineState, *, settings: Settings, recognizer: Recognizer
 ) -> PipelineState:
     chunks = state["chunks"]
+    instructions = state.get("instructions")
     parts: list[str] = []
     for idx, chunk in enumerate(chunks, start=1):
         log.info("recognize_chunk", chunk=idx, total=len(chunks))
-        text = recognizer.recognize(Path(chunk))
+        text = recognizer.recognize(Path(chunk), extra_instructions=instructions)
         parts.append(text)
     return {"parts": parts}
 
@@ -75,6 +82,11 @@ def merge_node(state: PipelineState, *, settings: Settings) -> PipelineState:
 
 def write_node(state: PipelineState, *, settings: Settings) -> PipelineState:
     pdf_path = Path(state["pdf_path"])
-    md_path = write_md(pdf_path, state["body"], pdf_hash=state["pdf_hash"])
+    md_path = write_md(
+        pdf_path,
+        state["body"],
+        pdf_hash=state["pdf_hash"],
+        instructions=state.get("instructions"),
+    )
     log.info("wrote_md", pdf=str(pdf_path), md=str(md_path))
     return {"md_path": str(md_path)}

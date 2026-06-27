@@ -51,7 +51,13 @@ class DebouncedSubmitter:
 
 
 class PdfEventHandler(FileSystemEventHandler):
-    """Routes PDF created/modified/moved events to a debounced submitter."""
+    """Routes PDF and sibling-MD events to a debounced submitter (keyed by the PDF).
+
+    A ``.md`` event maps to its sibling ``.pdf`` so that adding/editing the
+    ``## OCR Instructions`` section triggers re-recognition. Our own atomic ``.md`` writes
+    do not loop: after writing, the recorded hashes match the file, so the requeued PDF is
+    immediately "fresh" and skipped by the worker's staleness re-check.
+    """
 
     def __init__(
         self,
@@ -65,7 +71,14 @@ class PdfEventHandler(FileSystemEventHandler):
 
     def _maybe(self, raw_path: str | bytes) -> None:
         path = Path(os.fsdecode(raw_path)) if isinstance(raw_path, bytes) else Path(raw_path)
-        if path.suffix.lower() != ".pdf":
+        suffix = path.suffix.lower()
+        if suffix == ".pdf":
+            pdf = path
+        elif suffix == ".md":
+            pdf = path.with_suffix(".pdf")
+            if not pdf.exists():
+                return  # plain note, not a transcription for any PDF we know about
+        else:
             return
         try:
             rel = path.relative_to(self._vault_root)
@@ -73,8 +86,8 @@ class PdfEventHandler(FileSystemEventHandler):
             rel = path
         if is_ignored(rel, self._ignore_globs):
             return
-        log.debug("pdf_event", path=str(path))
-        self._submitter.trigger(path)
+        log.debug("fs_event", path=str(path), pdf=str(pdf))
+        self._submitter.trigger(pdf)
 
     def on_created(self, event: FileSystemEvent) -> None:
         if not event.is_directory:

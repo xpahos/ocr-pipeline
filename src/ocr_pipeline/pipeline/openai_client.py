@@ -29,7 +29,12 @@ def _redact(proxy_url: str) -> str:
 class Recognizer(Protocol):
     """Transcribes a single PDF (already within OpenAI's per-request limits)."""
 
-    def recognize(self, pdf_path: Path, on_delta: DeltaCallback | None = None) -> str:
+    def recognize(
+        self,
+        pdf_path: Path,
+        on_delta: DeltaCallback | None = None,
+        extra_instructions: str | None = None,
+    ) -> str:
         ...
 
 
@@ -76,12 +81,36 @@ class OpenAIRecognizer:
             timeout=httpx.Timeout(self._settings.request_timeout, connect=15.0),
         )
 
-    def recognize(self, pdf_path: Path, on_delta: DeltaCallback | None = None) -> str:
-        return self._with_retries(lambda: self._recognize_once(pdf_path, on_delta))
+    def recognize(
+        self,
+        pdf_path: Path,
+        on_delta: DeltaCallback | None = None,
+        extra_instructions: str | None = None,
+    ) -> str:
+        return self._with_retries(
+            lambda: self._recognize_once(pdf_path, on_delta, extra_instructions)
+        )
 
     # -- internals ---------------------------------------------------------------
 
-    def _recognize_once(self, pdf_path: Path, on_delta: DeltaCallback | None) -> str:
+    @staticmethod
+    def _system_prompt(extra_instructions: str | None) -> str:
+        if not extra_instructions or not extra_instructions.strip():
+            return SYSTEM_PROMPT
+        return (
+            f"{SYSTEM_PROMPT}\n\n"
+            "The following correction instructions were provided by a human reviewer for "
+            "this specific document. Treat them as higher priority than the general rules "
+            "above when they conflict:\n\n"
+            f"{extra_instructions.strip()}"
+        )
+
+    def _recognize_once(
+        self,
+        pdf_path: Path,
+        on_delta: DeltaCallback | None,
+        extra_instructions: str | None,
+    ) -> str:
         client = self.client
         with open(pdf_path, "rb") as fh:
             uploaded = client.files.create(file=fh, purpose="user_data")
@@ -90,7 +119,7 @@ class OpenAIRecognizer:
         try:
             stream = client.responses.create(
                 model=self._settings.model,
-                instructions=SYSTEM_PROMPT,
+                instructions=self._system_prompt(extra_instructions),
                 input=[
                     {
                         "role": "user",
