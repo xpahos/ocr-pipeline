@@ -9,7 +9,7 @@ from typing import Callable, Protocol
 import structlog
 
 from ..config import Settings
-from .prompts import SYSTEM_PROMPT, USER_PROMPT
+from .prompts import SYSTEM_PROMPT, compose_user
 
 log = structlog.get_logger(__name__)
 
@@ -93,18 +93,6 @@ class OpenAIRecognizer:
 
     # -- internals ---------------------------------------------------------------
 
-    @staticmethod
-    def _system_prompt(extra_instructions: str | None) -> str:
-        if not extra_instructions or not extra_instructions.strip():
-            return SYSTEM_PROMPT
-        return (
-            f"{SYSTEM_PROMPT}\n\n"
-            "The following correction instructions were provided by a human reviewer for "
-            "this specific document. Treat them as higher priority than the general rules "
-            "above when they conflict:\n\n"
-            f"{extra_instructions.strip()}"
-        )
-
     def _recognize_once(
         self,
         pdf_path: Path,
@@ -119,12 +107,12 @@ class OpenAIRecognizer:
         try:
             stream = client.responses.create(
                 model=self._settings.model,
-                instructions=self._system_prompt(extra_instructions),
+                instructions=SYSTEM_PROMPT,
                 input=[
                     {
                         "role": "user",
                         "content": [
-                            {"type": "input_text", "text": USER_PROMPT},
+                            {"type": "input_text", "text": compose_user(extra_instructions)},
                             {"type": "input_file", "file_id": file_id},
                         ],
                     }
