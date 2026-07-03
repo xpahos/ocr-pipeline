@@ -29,10 +29,15 @@ language. Do NOT translate.
 - Convert diagrams, flowcharts, or schematic drawings to ASCII art inside a fenced code \
 block, placed where the diagram appears.
 - Carefully inspect the FIRST COLUMN (left margin) of every line for Bullet-Journal \
-signifiers and transcribe them faithfully — never drop or normalize them. Common marks: \
-`x` done, `>` moved/migrated, `<` scheduled, `-` cancelled/note, `?` to clarify, \
-`!` urgent, `*` priority, `o` event (and similar). Preserve the original glyph at the start \
-of the corresponding list item; if a mark is ambiguous, keep it verbatim.
+signifiers: `x` done, `>` moved/migrated, `<` scheduled, `-` cancelled/note, `?` to \
+clarify, `!` urgent, `*` priority, `o` event (and similar). When a block of lines uses \
+these marks, render that block as a two-column Markdown table with the header \
+`| Mark | Entry |`: put the mark EXACTLY as written in the first cell, wrapped in \
+backticks (e.g. `` `x` ``, `` `>` ``, `` `-` ``), and the transcribed line text in the \
+second cell. The backticks and table cell keep Obsidian from interpreting a mark as a \
+bullet list or blockquote. Never drop, translate, or normalize a mark; if a mark is \
+ambiguous, keep the glyph verbatim. Do NOT turn marked lines into Markdown bullet lists \
+or blockquotes.
 - If you encounter a complex image or drawing you cannot faithfully reproduce as text or \
 ASCII, do NOT guess. Insert a clearly visible note exactly in this form so it stands out \
 for manual review: <span style="color:red">[COMPLEX IMAGE: short description of what it \

@@ -16,6 +16,8 @@ def test_system_prompt_has_core_rules():
     assert "Bullet-Journal" in SYSTEM_PROMPT
     for mark in ("`x`", "`>`", "`!`"):
         assert mark in SYSTEM_PROMPT
+    # Marks go into a two-column table (not bullet/quote syntax) so Obsidian keeps them literal.
+    assert "| Mark | Entry |" in SYSTEM_PROMPT
 
 
 def test_compose_user_without_corrections():
