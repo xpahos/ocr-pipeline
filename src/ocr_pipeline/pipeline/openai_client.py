@@ -9,6 +9,7 @@ from typing import Callable, Protocol
 import structlog
 
 from ..config import Settings
+from ..monitoring import classify_llm_error, record_llm_error, record_llm_success
 from .prompts import SYSTEM_PROMPT, compose_user
 
 log = structlog.get_logger(__name__)
@@ -99,6 +100,23 @@ class OpenAIRecognizer:
         on_delta: DeltaCallback | None,
         extra_instructions: str | None,
     ) -> str:
+        model = self._settings.model
+        try:
+            text, input_tokens, output_tokens = self._request(
+                pdf_path, on_delta, extra_instructions
+            )
+        except Exception as exc:
+            record_llm_error("openai", model, classify_llm_error(exc))
+            raise
+        record_llm_success("openai", model, input_tokens, output_tokens)
+        return text
+
+    def _request(
+        self,
+        pdf_path: Path,
+        on_delta: DeltaCallback | None,
+        extra_instructions: str | None,
+    ) -> tuple[str, int, int]:
         client = self.client
         with open(pdf_path, "rb") as fh:
             uploaded = client.files.create(file=fh, purpose="user_data")
@@ -127,8 +145,10 @@ class OpenAIRecognizer:
                 log.warning("file_delete_failed", file_id=file_id)
 
     @staticmethod
-    def _collect_stream(stream, on_delta: DeltaCallback | None) -> str:
+    def _collect_stream(stream, on_delta: DeltaCallback | None) -> tuple[str, int, int]:
         parts: list[str] = []
+        input_tokens = 0
+        output_tokens = 0
         for event in stream:
             etype = getattr(event, "type", "")
             if etype == "response.output_text.delta":
@@ -137,9 +157,14 @@ class OpenAIRecognizer:
                     parts.append(delta)
                     if on_delta is not None:
                         on_delta(delta)
+            elif etype == "response.completed":
+                usage = getattr(getattr(event, "response", None), "usage", None)
+                if usage is not None:
+                    input_tokens = getattr(usage, "input_tokens", 0) or 0
+                    output_tokens = getattr(usage, "output_tokens", 0) or 0
             elif etype == "response.error":
                 raise RuntimeError(f"OpenAI stream error: {getattr(event, 'error', '')}")
-        return "".join(parts).strip()
+        return "".join(parts).strip(), input_tokens, output_tokens
 
     def _with_retries(self, fn: Callable[[], str]) -> str:
         from openai import (

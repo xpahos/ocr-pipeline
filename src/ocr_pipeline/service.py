@@ -10,6 +10,7 @@ from watchdog.observers import Observer
 
 from .config import Settings
 from .mdfile import is_stale
+from .monitoring import classify_sync_error, record_sync_error, record_sync_success
 from .pipeline.graph import Pipeline
 from .queue import WorkQueue
 from .reconcile import reconcile
@@ -36,7 +37,12 @@ class Service:
             log.debug("skip_fresh", pdf=str(pdf_path))
             return
         log.info("processing", pdf=str(pdf_path))
-        self.pipeline.process(pdf_path)
+        try:
+            self.pipeline.process(pdf_path)
+        except Exception as exc:
+            record_sync_error(classify_sync_error(exc))
+            raise
+        record_sync_success()
 
     def run(self) -> None:
         root = self.settings.vault_root

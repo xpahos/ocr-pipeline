@@ -10,6 +10,7 @@ from typing import Callable
 import structlog
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 
+from .monitoring import INOTIFY_EVENTS_TOTAL
 from .reconcile import is_ignored
 
 log = structlog.get_logger(__name__)
@@ -90,14 +91,17 @@ class PdfEventHandler(FileSystemEventHandler):
         self._submitter.trigger(pdf)
 
     def on_created(self, event: FileSystemEvent) -> None:
+        INOTIFY_EVENTS_TOTAL.labels(event_type=event.event_type).inc()
         if not event.is_directory:
             self._maybe(event.src_path)
 
     def on_modified(self, event: FileSystemEvent) -> None:
+        INOTIFY_EVENTS_TOTAL.labels(event_type=event.event_type).inc()
         if not event.is_directory:
             self._maybe(event.src_path)
 
     def on_moved(self, event: FileSystemEvent) -> None:
+        INOTIFY_EVENTS_TOTAL.labels(event_type=event.event_type).inc()
         # A move/rename lands the file at its destination — treat as a new arrival.
         if not event.is_directory:
             self._maybe(event.dest_path)
