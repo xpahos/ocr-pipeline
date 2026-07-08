@@ -1,0 +1,53 @@
+# systemd unit for the OCR pipeline service.
+#
+# Install:
+#   sudo cp deploy/ocr-pipeline.service /etc/systemd/system/
+#   # edit paths + User below for your machine, then:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now ocr-pipeline
+#
+# Logs:    journalctl -u ocr-pipeline -f
+# Metrics: http://127.0.0.1:50000/metrics
+
+[Unit]
+Description=OCR pipeline (watch Obsidian vault, transcribe handwritten PDFs)
+Documentation=https://github.com/xpahos/ocr-pipeline
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=exec
+# Run as an unprivileged user that can write to the vault.
+User=ocr
+Group=ocr
+
+WorkingDirectory=/opt/ocr-pipeline
+
+# systemd injects KEY=value pairs from this file into the environment.
+# The repo's .env format is compatible as-is: one KEY=value per line,
+# "#" comments allowed, no `export` prefix, no ${VAR} expansion.
+# The leading "-" makes a missing file non-fatal (the app also reads
+# .env itself from WorkingDirectory via pydantic-settings).
+EnvironmentFile=-/opt/ocr-pipeline/.env
+
+ExecStart=/opt/ocr-pipeline/.venv/bin/ocr-pipeline --monitoring-port 50000
+
+# The service traps SIGTERM and shuts down cleanly (stops the watcher,
+# drains the queue); give a long-running OpenAI call time to finish.
+KillSignal=SIGTERM
+TimeoutStopSec=60
+
+Restart=on-failure
+RestartSec=5
+
+# --- Hardening -------------------------------------------------------------
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+# Writes .md transcriptions next to the PDFs — must match OCR_VAULT_ROOT.
+ReadWritePaths=/path/to/your/vault
+# If the vault lives under /home, relax ProtectHome accordingly.
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

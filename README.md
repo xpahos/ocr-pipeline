@@ -58,3 +58,24 @@ ocr-pipeline
 ```
 
 Run the tests with `pytest`.
+
+Prometheus metrics are exposed on a separate monitoring port (default `50000`,
+override with `--monitoring-port`): `http://127.0.0.1:50000/metrics`.
+
+## Running under systemd
+
+A unit file is provided in [`deploy/ocr-pipeline.service`](deploy/ocr-pipeline.service).
+It assumes the project is installed in `/opt/ocr-pipeline` with its venv and `.env`
+alongside — adjust the paths, `User=`, and `ReadWritePaths=` (must match
+`OCR_VAULT_ROOT`) for your machine, then:
+
+```bash
+sudo cp deploy/ocr-pipeline.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now ocr-pipeline
+journalctl -u ocr-pipeline -f   # follow logs
+```
+
+Environment configuration comes from the same `.env` file: the unit passes it via
+`EnvironmentFile=`, and pydantic-settings would also pick it up from
+`WorkingDirectory` on its own, so both stay in sync automatically.
