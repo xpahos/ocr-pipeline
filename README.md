@@ -23,11 +23,49 @@ PDF's current bytes.
    `.md` is missing or stale.
 2. **Live monitoring** — a cross-platform `watchdog` observer reacts to PDF created /
    modified / moved events (debounced to absorb sync bursts).
-3. **Pipeline** (LangGraph) — `validate → split → recognize → merge → write`. Oversized
-   PDFs are split to fit OpenAI's 100-page / 32 MB per-request limits, then merged. The
-   transcription streams token-by-token from the Responses API and is written atomically.
+3. **Pipeline** (LangGraph) — `validate → split → OCR → Markdown → verify → merge → write`.
+   Each stage has one job:
+   - OCR produces a literal transcription with page and uncertainty markers.
+   - Markdown formatting transforms only that transcription into Obsidian Markdown.
+   - Verification compares the candidate Markdown with the original pages and corrects
+     source-supported discrepancies.
+
+   PDFs are split into quality-oriented chunks (10 pages by default), each stage streams
+   through the Responses API, and the final transcription is written atomically.
 
 Processing is **serial**: at most one OpenAI job runs at a time.
+
+## PDF versus rendered PNG
+
+The default `OCR_INPUT_MODE=pdf` sends each PDF chunk with `detail=high`. This retains any
+embedded text layer and is the best starting point.
+
+Set `OCR_INPUT_MODE=png` to render pages on the fly with PyMuPDF. The temporary PNGs are
+created at `OCR_IMAGE_DPI` (default 300), uploaded as ordered `input_image` parts with
+`detail=original`, and deleted after each OCR or verification request. They are never
+written into the Obsidian vault.
+
+PNG is not assumed to be universally better: compare both modes on representative pages.
+It is most likely to help pure scans with small handwriting; PDF mode can win when the PDF
+contains a useful text layer.
+
+The OCR and verification passes use `OCR_MODEL` by default; formatting can use a cheaper
+text model:
+
+```dotenv
+OCR_MODEL=gpt-5.6-terra
+OCR_FORMAT_MODEL=gpt-5.6-luna
+OCR_VERIFY_MODEL=gpt-5.6-terra
+OCR_REASONING_EFFORT=low
+```
+
+`OCR_VERIFY_MODE=uncertain` verifies only chunks containing `[?]` or `[illegible]`, plus
+documents with human `## OCR Instructions`. Use `always` to verify every chunk or `off` to
+disable visual verification. The verifier returns only changed numbered lines through a
+strict JSON schema; the service applies those replacements deterministically instead of
+paying for another complete Markdown output.
+
+`OCR_FORMATTING_ENABLED=false` disables the formatting pass.
 
 ## Correcting a transcription
 
@@ -42,7 +80,7 @@ instructions section at the **end** of the `.md` file:
 ```
 
 On save, the service notices the change (the `instr:` hash in the first line no longer
-matches), re-runs recognition for that PDF with your notes appended to the system prompt,
+matches), re-runs the pipeline for that PDF with your notes supplied to every stage,
 and rewrites the `.md` — **keeping your instructions section intact** so it keeps applying
 on future passes. Editing the `.md` alone is enough to trigger a rerun; the PDF doesn't
 need to change. Writing the file back does not cause a loop, because once written the

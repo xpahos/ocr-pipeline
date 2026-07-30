@@ -9,11 +9,12 @@ description = "Watch an Obsidian vault and transcribe handwritten PDFs to Markdo
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "openai>=1.40",
+    "openai>=2.44",
     "httpx[socks]>=0.27",
     "langgraph>=0.2",
     "watchdog>=4.0",
     "pypdf>=4.2",
+    "pymupdf>=1.24",
     "pydantic>=2.6",
     "pydantic-settings>=2.2",
     "prometheus-client>=0.20",

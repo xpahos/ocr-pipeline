@@ -1,78 +1,128 @@
-"""Prompt text for handwriting transcription.
-
-Structured with XML-style tags (matching the house convention in the sibling `llm-summary`
-project): a stable ``SYSTEM_PROMPT`` carrying role/style/rules, and ``compose_user`` which
-assembles the per-request user message from ``<task>`` / optional ``<corrections>`` /
-``<output>`` tags. Transcription-only: the document's languages are preserved verbatim
-(no translation).
-"""
+"""Prompts for the three independent document-processing stages."""
 
 from __future__ import annotations
 
-SYSTEM_PROMPT = """\
+OCR_SYSTEM_PROMPT = """\
 <role>
-You are a meticulous transcription engine for scanned handwritten documents.
+You are a literal OCR transcription engine for scanned handwritten documents.
 </role>
 
-<style>
-- Output clean Obsidian-flavored Markdown and nothing else.
-- Transcribe faithfully; never invent text.
-</style>
-
 <rules>
-- The document contains handwritten Russian and English. Keep every passage in its ORIGINAL \
-language. Do NOT translate.
-- Preserve structure as Markdown (headings, lists, tables, emphasis, blockquotes, code).
-- Use Obsidian Markdown extensions where they match the source: LaTeX math (`$inline$` and \
-`$$block$$`), `==highlight==`, and callouts (`> [!note]`). Do NOT invent wikilinks \
-(`[[…]]`) or embeds (`![[…]]`) that are not written in the document.
-- Convert diagrams, flowcharts, or schematic drawings to ASCII art inside a fenced code \
-block, placed where the diagram appears.
-- Carefully inspect the FIRST COLUMN (left margin) of every line for Bullet-Journal \
-signifiers: `x` done, `>` moved/migrated, `<` scheduled, `-` cancelled/note, `?` to \
-clarify, `!` urgent, `*` priority, `o` event (and similar). When a block of lines uses \
-these marks, render that block as a two-column Markdown table with the header \
-`| Mark | Entry |`: put the mark EXACTLY as written in the first cell, wrapped in \
-backticks (e.g. `` `x` ``, `` `>` ``, `` `-` ``), and the transcribed line text in the \
-second cell. The backticks and table cell keep Obsidian from interpreting a mark as a \
-bullet list or blockquote. Never drop, translate, or normalize a mark; if a mark is \
-ambiguous, keep the glyph verbatim. Do NOT turn marked lines into Markdown bullet lists \
-or blockquotes.
-- If you encounter a complex image or drawing you cannot faithfully reproduce as text or \
-ASCII, do NOT guess. Insert a clearly visible note exactly in this form so it stands out \
-for manual review: <span style="color:red">[COMPLEX IMAGE: short description of what it \
-shows — needs manual review]</span>.
-- If a word or passage is illegible, mark it as <span style="color:red">[illegible]</span> \
-rather than inventing text.
-- Output ONLY the transcribed Markdown body. Do not add a preamble, explanation, or wrap \
-the whole document in a code fence.
+- Transcribe visible text exactly. Never translate, normalize, correct spelling, paraphrase,
+  summarize, or improve wording.
+- Preserve capitalization, punctuation, numbers, decimal separators, signs, dates, initials,
+  line breaks, and handwritten margin marks.
+- Do not infer Markdown structure. Do not turn marks into bullets, tables, headings, or
+  blockquotes.
+- Start each page with `[PAGE N]`, using the order of the supplied pages.
+- Mark an unreadable passage as `[illegible]`. For one doubtful character, use `[?]` in its
+  position. Never silently guess.
+- Represent a table row by row with ` | ` between visible cells. Do not merge cells.
+- For a non-text drawing or diagram, write `[IMAGE: short literal description]`; do not
+  interpret its meaning.
+- Output only the literal transcription.
 </rules>\
 """
 
-_TASK = (
-    "Transcribe the attached handwritten document into Markdown, following the rules in the "
-    "system prompt."
-)
+MARKDOWN_SYSTEM_PROMPT = """\
+<role>
+You format an existing literal OCR transcription as clean Obsidian-flavored Markdown.
+</role>
 
-_OUTPUT = "Output only the transcribed Markdown body — no preamble and no surrounding code fence."
+<rules>
+- Use only information present in the transcription. Never re-read, correct, invent,
+  translate, or omit document content.
+- Preserve `[PAGE N]`, `[illegible]`, `[?]`, and `[IMAGE: ...]` markers.
+- Preserve all words, numbers, dates, punctuation, signs, and capitalization exactly.
+- Convert visible structure to Markdown: headings, lists, tables, emphasis, blockquotes,
+  code, and LaTeX math where clearly indicated.
+- When a block uses Bullet-Journal marks in the first column (`x`, `>`, `<`, `-`, `?`, `!`,
+  `*`, `o`, or similar), render it as a `| Mark | Entry |` table. Put each mark verbatim in
+  backticks in the first cell.
+- Never invent wikilinks or embeds.
+- Keep an image marker as a visible manual-review note:
+  `<span style="color:red">[IMAGE: description — needs manual review]</span>`.
+- Render illegible and doubtful markers in red, without changing their text.
+- Output only the Markdown body.
+</rules>\
+"""
+
+VERIFY_SYSTEM_PROMPT = """\
+<role>
+You verify a candidate Markdown transcription against the original scanned pages.
+</role>
+
+<rules>
+- The candidate is supplied as numbered lines. Compare every line with the source, with
+  special attention to numbers, signs, decimal
+  separators, dates, names, initials, document identifiers, and table rows.
+- Correct only source-supported transcription errors, omissions, duplicated text, wrong page
+  order, and formatting that changes the source's meaning.
+- Do not improve spelling or wording and do not remove uncertainty markers unless the source
+  resolves them.
+- Return a correction only for a line that must change. Its `replacement` must contain the
+  complete corrected content of that single line, without a line-number prefix or newline.
+- Preserve valid Obsidian Markdown and all `[PAGE N]` boundaries. Never insert or delete a
+  line; attach a missing fragment to the nearest existing line.
+- If the source remains unreadable, use `[illegible]` or `[?]`; never guess.
+</rules>\
+"""
 
 _CORRECTIONS_PREAMBLE = (
-    "The following correction instructions were provided by a human reviewer for THIS "
-    "specific document. Treat them as higher priority than the base rules when they conflict:"
+    "Human review instructions for this specific document follow. Apply them when they do not "
+    "require inventing content that is absent from the source:"
 )
+
+
+def _corrections_block(corrections: str | None) -> str:
+    if not corrections or not corrections.strip():
+        return ""
+    return (
+        "\n\n<corrections>\n"
+        f"{_CORRECTIONS_PREAMBLE}\n\n{corrections.strip()}\n"
+        "</corrections>"
+    )
+
+
+def compose_ocr_user(corrections: str | None = None) -> str:
+    return (
+        "<task>\nPerform literal OCR of the supplied document pages.\n</task>"
+        f"{_corrections_block(corrections)}"
+        "\n\n<output>\nOutput only the literal transcription.\n</output>"
+    )
+
+
+def compose_markdown_user(transcription: str, corrections: str | None = None) -> str:
+    return (
+        "<task>\nFormat the literal OCR transcription as Obsidian Markdown.\n</task>"
+        f"{_corrections_block(corrections)}"
+        "\n\n<transcription>\n"
+        f"{transcription.strip()}\n"
+        "</transcription>\n\n"
+        "<output>\nOutput only the Markdown body.\n</output>"
+    )
+
+
+def compose_verify_user(markdown: str, corrections: str | None = None) -> str:
+    numbered_lines = "\n".join(
+        f"{line_number}\t{line}"
+        for line_number, line in enumerate(markdown.splitlines(), start=1)
+    )
+    return (
+        "<task>\n"
+        "Verify the numbered candidate lines against the supplied pages. Return only changed "
+        "lines through the required structured output.\n"
+        "</task>"
+        f"{_corrections_block(corrections)}"
+        "\n\n<candidate_lines>\n"
+        f"{numbered_lines}\n"
+        "</candidate_lines>"
+    )
+
+
+# Compatibility aliases for imports used by older integrations.
+SYSTEM_PROMPT = OCR_SYSTEM_PROMPT
 
 
 def compose_user(corrections: str | None = None) -> str:
-    """Assemble the user message text part from structured tags.
-
-    The PDF itself is sent as a separate ``input_file`` content part, so there is no
-    ``<input>`` tag here. ``corrections`` (the document's ``## OCR Instructions`` text, if
-    any) is wrapped in a ``<corrections>`` block that overrides the base rules.
-    """
-    parts = [f"<task>\n{_TASK}\n</task>"]
-    if corrections and corrections.strip():
-        parts.append(
-            f"<corrections>\n{_CORRECTIONS_PREAMBLE}\n\n{corrections.strip()}\n</corrections>"
-        )
-    parts.append(f"<output>\n{_OUTPUT}\n</output>")
-    return "\n\n".join(parts)
+    return compose_ocr_user(corrections)

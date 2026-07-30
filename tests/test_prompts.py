@@ -1,39 +1,40 @@
 from __future__ import annotations
 
-from ocr_pipeline.pipeline.prompts import SYSTEM_PROMPT, compose_user
+from ocr_pipeline.pipeline.prompts import (
+    MARKDOWN_SYSTEM_PROMPT,
+    OCR_SYSTEM_PROMPT,
+    VERIFY_SYSTEM_PROMPT,
+    compose_markdown_user,
+    compose_ocr_user,
+    compose_verify_user,
+)
 
 
-def test_system_prompt_is_structured():
-    for tag in ("<role>", "</role>", "<style>", "</style>", "<rules>", "</rules>"):
-        assert tag in SYSTEM_PROMPT
+def test_ocr_prompt_is_literal_not_markdown():
+    assert "literal OCR" in OCR_SYSTEM_PROMPT
+    assert "Do not infer Markdown structure" in OCR_SYSTEM_PROMPT
+    assert "[PAGE N]" in OCR_SYSTEM_PROMPT
+    assert "[illegible]" in OCR_SYSTEM_PROMPT
 
 
-def test_system_prompt_has_core_rules():
-    # Obsidian-flavored target, no translation, and the first-column Bullet-Journal rule.
-    assert "Obsidian-flavored" in SYSTEM_PROMPT
-    assert "Do NOT translate" in SYSTEM_PROMPT
-    assert "FIRST COLUMN" in SYSTEM_PROMPT
-    assert "Bullet-Journal" in SYSTEM_PROMPT
-    for mark in ("`x`", "`>`", "`!`"):
-        assert mark in SYSTEM_PROMPT
-    # Marks go into a two-column table (not bullet/quote syntax) so Obsidian keeps them literal.
-    assert "| Mark | Entry |" in SYSTEM_PROMPT
+def test_markdown_prompt_formats_without_retranscribing():
+    assert "Obsidian-flavored Markdown" in MARKDOWN_SYSTEM_PROMPT
+    assert "| Mark | Entry |" in MARKDOWN_SYSTEM_PROMPT
+    assert "Never re-read, correct, invent" in MARKDOWN_SYSTEM_PROMPT
 
 
-def test_compose_user_without_corrections():
-    text = compose_user(None)
-    assert "<task>" in text and "</task>" in text
-    assert "<output>" in text and "</output>" in text
-    assert "<corrections>" not in text
+def test_verify_prompt_checks_high_risk_fields():
+    for value in ("numbers", "dates", "names", "table rows"):
+        assert value in VERIFY_SYSTEM_PROMPT
+    assert "complete corrected content of that single line" in VERIFY_SYSTEM_PROMPT
 
 
-def test_compose_user_blank_corrections_omits_block():
-    assert "<corrections>" not in compose_user("   ")
+def test_user_messages_keep_payloads_and_corrections_separate():
+    ocr = compose_ocr_user("The name is Пётр")
+    formatted = compose_markdown_user("[PAGE 1]\ntext")
+    verified = compose_verify_user("[PAGE 1]\n# text")
 
-
-def test_compose_user_with_corrections():
-    text = compose_user("Page 2 is a UML diagram.")
-    assert "<corrections>" in text and "</corrections>" in text
-    assert "Page 2 is a UML diagram." in text
-    # Corrections are framed as overriding the base rules.
-    assert "higher priority" in text
+    assert "<corrections>" in ocr and "Пётр" in ocr
+    assert "<transcription>" in formatted
+    assert "<candidate_lines>" in verified
+    assert "<corrections>" not in compose_ocr_user("   ")

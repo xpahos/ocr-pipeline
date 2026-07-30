@@ -6,6 +6,7 @@ leaves the PDF un-transcribed so it is retried later.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import TypedDict
 
@@ -14,13 +15,15 @@ import structlog
 from ..config import Settings
 from ..hashing import md5_of_file
 from ..mdfile import md_path_for, read_instructions, write_md
-from ..pdfutil import split_pdf
-from .openai_client import Recognizer
+from ..pdfutil import inspect, split_pdf
+from .openai_client import DocumentProcessor, VerificationResult
 
 log = structlog.get_logger(__name__)
 
 # Separator between merged chunk transcriptions.
 CHUNK_SEPARATOR = "\n\n---\n\n"
+_PAGE_MARKER_RE = re.compile(r"\[PAGE\s+(\d+)\]", re.IGNORECASE)
+_UNCERTAINTY_RE = re.compile(r"\[(?:\?|illegible)\]", re.IGNORECASE)
 
 
 class PipelineState(TypedDict, total=False):
@@ -29,7 +32,9 @@ class PipelineState(TypedDict, total=False):
     pdf_hash: str
     instructions: str | None
     chunks: list[str]
-    parts: list[str]
+    ocr_parts: list[str]
+    markdown_parts: list[str]
+    verified_parts: list[str]
     body: str
     md_path: str
 
@@ -62,21 +67,97 @@ def split_node(state: PipelineState, *, settings: Settings) -> PipelineState:
     return {"chunks": [str(c) for c in chunks]}
 
 
-def recognize_node(
-    state: PipelineState, *, settings: Settings, recognizer: Recognizer
+def ocr_node(
+    state: PipelineState, *, settings: Settings, processor: DocumentProcessor
 ) -> PipelineState:
     chunks = state["chunks"]
     instructions = state.get("instructions")
     parts: list[str] = []
+    page_offset = 0
     for idx, chunk in enumerate(chunks, start=1):
-        log.info("recognize_chunk", chunk=idx, total=len(chunks))
-        text = recognizer.recognize(Path(chunk), extra_instructions=instructions)
-        parts.append(text)
-    return {"parts": parts}
+        log.info("ocr_chunk", chunk=idx, total=len(chunks))
+        chunk_path = Path(chunk)
+        text = processor.ocr(chunk_path, extra_instructions=instructions)
+        parts.append(
+            _PAGE_MARKER_RE.sub(
+                lambda match: f"[PAGE {int(match.group(1)) + page_offset}]",
+                text,
+            )
+        )
+        page_offset += inspect(chunk_path).page_count
+    return {"ocr_parts": parts}
+
+
+def format_node(
+    state: PipelineState, *, settings: Settings, processor: DocumentProcessor
+) -> PipelineState:
+    if not settings.formatting_enabled:
+        return {"markdown_parts": state["ocr_parts"]}
+
+    instructions = state.get("instructions")
+    parts: list[str] = []
+    for idx, transcription in enumerate(state["ocr_parts"], start=1):
+        log.info("format_chunk", chunk=idx, total=len(state["ocr_parts"]))
+        parts.append(
+            processor.format_markdown(
+                transcription, extra_instructions=instructions
+            )
+        )
+    return {"markdown_parts": parts}
+
+
+def verify_node(
+    state: PipelineState, *, settings: Settings, processor: DocumentProcessor
+) -> PipelineState:
+    if settings.verify_mode == "off":
+        return {"verified_parts": state["markdown_parts"]}
+
+    instructions = state.get("instructions")
+    chunks = state["chunks"]
+    parts: list[str] = []
+    for idx, (chunk, markdown) in enumerate(
+        zip(chunks, state["markdown_parts"], strict=True), start=1
+    ):
+        should_verify = (
+            settings.verify_mode == "always"
+            or bool(instructions and instructions.strip())
+            or bool(_UNCERTAINTY_RE.search(markdown))
+        )
+        if not should_verify:
+            log.info("verify_chunk_skipped", chunk=idx, reason="no_uncertainty")
+            parts.append(markdown)
+            continue
+        log.info("verify_chunk", chunk=idx, total=len(chunks))
+        result = processor.verify(
+            Path(chunk), markdown, extra_instructions=instructions
+        )
+        parts.append(apply_line_corrections(markdown, result))
+    return {"verified_parts": parts}
+
+
+def apply_line_corrections(markdown: str, result: VerificationResult) -> str:
+    """Apply verifier replacements without asking the model to reproduce the document."""
+    lines = markdown.splitlines()
+    seen: set[int] = set()
+    for correction in result.corrections:
+        line_number = correction.line_number
+        if line_number in seen:
+            raise ValueError(f"Verifier returned duplicate line {line_number}")
+        if line_number > len(lines):
+            raise ValueError(
+                f"Verifier returned line {line_number}, but candidate has {len(lines)} lines"
+            )
+        if "\n" in correction.replacement or "\r" in correction.replacement:
+            raise ValueError(
+                f"Verifier replacement for line {line_number} contains a newline"
+            )
+        seen.add(line_number)
+        lines[line_number - 1] = correction.replacement
+    return "\n".join(lines)
 
 
 def merge_node(state: PipelineState, *, settings: Settings) -> PipelineState:
-    parts = [p.strip() for p in state["parts"] if p.strip()]
+    parts = [p.strip() for p in state["verified_parts"] if p.strip()]
     return {"body": CHUNK_SEPARATOR.join(parts)}
 
 
