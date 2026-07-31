@@ -15,11 +15,14 @@ def test_ocr_prompt_is_literal_not_markdown():
     assert "Do not infer Markdown structure" in OCR_SYSTEM_PROMPT
     assert "[PAGE N]" in OCR_SYSTEM_PROMPT
     assert "[illegible]" in OCR_SYSTEM_PROMPT
+    assert "[BJ:M]" in OCR_SYSTEM_PROMPT
+    assert "never replace them with arrows" in OCR_SYSTEM_PROMPT
 
 
 def test_markdown_prompt_formats_without_retranscribing():
     assert "Obsidian-flavored Markdown" in MARKDOWN_SYSTEM_PROMPT
-    assert "| Mark | Entry |" in MARKDOWN_SYSTEM_PROMPT
+    assert "[BJ:M]" in MARKDOWN_SYSTEM_PROMPT
+    assert "protected data" in MARKDOWN_SYSTEM_PROMPT
     assert "Never re-read, correct, invent" in MARKDOWN_SYSTEM_PROMPT
 
 

@@ -33,6 +33,11 @@ PDF's current bytes.
    PDFs are split into quality-oriented chunks (10 pages by default), each stage streams
    through the Responses API, and the final transcription is written atomically.
 
+   Bullet-Journal signifiers are protected between stages as `[BJ:M]` sentinels. Python,
+   rather than the formatting model, renders consecutive marked entries as the historical
+   `| Mark | Entry |` table. A changed, dropped, reordered, numeric, or arrow-normalized
+   sentinel fails the run before the existing `.md` can be replaced.
+
 Processing is **serial**: at most one OpenAI job runs at a time.
 
 ## PDF versus rendered PNG
@@ -80,11 +85,17 @@ instructions section at the **end** of the `.md` file:
 ```
 
 On save, the service notices the change (the `instr:` hash in the first line no longer
-matches), re-runs the pipeline for that PDF with your notes supplied to every stage,
-and rewrites the `.md` — **keeping your instructions section intact** so it keeps applying
+matches). When the PDF hash itself is unchanged, the service preserves the existing
+Markdown body and applies only line-level, source-verified corrections requested by your
+notes; it does not run OCR or Markdown formatting again. It rewrites the `.md` while
+**keeping your instructions section intact** so it keeps applying
 on future passes. Editing the `.md` alone is enough to trigger a rerun; the PDF doesn't
 need to change. Writing the file back does not cause a loop, because once written the
 recorded hashes match the file again.
+
+Changing models, prompts, configuration, or application code does not make existing
+documents stale. Startup reconciliation queues a document only when its PDF hash or OCR
+instruction hash differs, so deploying an update does not reprocess the vault.
 
 ## Usage
 

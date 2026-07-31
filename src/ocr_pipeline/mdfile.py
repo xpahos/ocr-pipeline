@@ -81,6 +81,19 @@ def read_instructions(md_path: Path) -> str | None:
     return body or None
 
 
+def read_body(md_path: Path) -> str | None:
+    """Return the generated Markdown body without its header or instructions section."""
+    try:
+        text = md_path.read_text(encoding="utf-8")
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    _, separator, remainder = text.partition("\n")
+    if not separator:
+        return None
+    body = _strip_instructions_section(remainder.strip())
+    return body or None
+
+
 def normalize_instructions(text: str) -> str:
     """Canonicalize instruction text for stable hashing (trim + strip trailing spaces)."""
     return "\n".join(line.rstrip() for line in text.strip().splitlines())

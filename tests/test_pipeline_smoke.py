@@ -6,7 +6,11 @@ from ocr_pipeline.config import Settings
 from ocr_pipeline.hashing import md5_of_file
 from ocr_pipeline.mdfile import read_recorded_hash
 from ocr_pipeline.pipeline.graph import Pipeline
-from ocr_pipeline.pipeline.nodes import CHUNK_SEPARATOR, apply_line_corrections
+from ocr_pipeline.pipeline.nodes import (
+    CHUNK_SEPARATOR,
+    apply_line_corrections,
+    render_bullet_journal_blocks,
+)
 from ocr_pipeline.pipeline.openai_client import LineCorrection, VerificationResult
 
 
@@ -34,9 +38,7 @@ class FakeProcessor:
     ) -> VerificationResult:
         self.verify_calls += 1
         self.instructions_seen.append(extra_instructions)
-        return VerificationResult(
-            corrections=[LineCorrection(line_number=2, replacement="# Verified")]
-        )
+        return VerificationResult(corrections=[])
 
 
 def _settings(**overrides) -> Settings:
@@ -58,7 +60,7 @@ def test_pipeline_runs_all_stages(pdf_factory):
     assert processor.verify_calls == 1
     assert read_recorded_hash(md_path) == md5_of_file(pdf)
     text = md_path.read_text(encoding="utf-8")
-    assert "# Verified" in text
+    assert "# Formatted 1" in text
     assert CHUNK_SEPARATOR not in text
 
 
@@ -72,9 +74,14 @@ def test_pipeline_passes_and_preserves_instructions(pdf_factory):
     pipeline = Pipeline(_settings(), processor=processor)
     md_path = pipeline.process(pdf)
 
-    assert processor.instructions_seen == ["Page 1 'Пётр' is a name."] * 3
+    assert processor.ocr_calls == 0
+    assert processor.format_calls == 0
+    assert processor.verify_calls == 1
+    assert processor.instructions_seen == ["Page 1 'Пётр' is a name."]
     assert read_instructions(md_path) == "Page 1 'Пётр' is a name."
-    assert "## OCR Instructions" in md_path.read_text(encoding="utf-8")
+    text = md_path.read_text(encoding="utf-8")
+    assert "old transcription" in text
+    assert "## OCR Instructions" in text
 
 
 def test_pipeline_splits_renumbers_and_merges(pdf_factory):
@@ -173,3 +180,49 @@ def test_line_corrections_reject_invalid_or_duplicate_lines():
         apply_line_corrections("original", duplicate)
     with pytest.raises(ValueError, match="candidate has 1 lines"):
         apply_line_corrections("original", out_of_range)
+
+
+def test_bullet_journal_marks_are_rendered_deterministically():
+    transcription = "[PAGE 1]\n[BJ:>] moved\n[BJ:o] event\n\nnormal"
+    formatted = "[PAGE 1]\n[BJ:>] moved\n[BJ:o] event\n\nnormal"
+
+    result = render_bullet_journal_blocks(transcription, formatted)
+
+    assert "| `>` | moved |" in result
+    assert "| `o` | event |" in result
+    assert "→" not in result
+    assert "[BJ:" not in result
+
+
+def test_bullet_journal_mark_changes_fail_before_write():
+    import pytest
+
+    with pytest.raises(ValueError, match="changed, dropped, or reordered"):
+        render_bullet_journal_blocks("[BJ:>] moved", "[BJ:→] moved")
+    with pytest.raises(ValueError, match="invalid Bullet-Journal marks"):
+        render_bullet_journal_blocks("[BJ:1] item", "[BJ:1] item")
+
+
+def test_formatter_regression_cannot_overwrite_existing_markdown(pdf_factory):
+    from ocr_pipeline.mdfile import write_md
+
+    class ArrowProcessor(FakeProcessor):
+        def ocr(self, pdf_path: Path, on_delta=None, extra_instructions=None) -> str:
+            return "[PAGE 1]\n[BJ:>] moved"
+
+        def format_markdown(
+            self, transcription: str, on_delta=None, extra_instructions=None
+        ) -> str:
+            return "[PAGE 1]\n[BJ:→] moved"
+
+    import pytest
+
+    pdf = pdf_factory("history.pdf")
+    md = write_md(pdf, "| Mark | Entry |\n| --- | --- |\n| `>` | historic |")
+    before = md.read_text(encoding="utf-8")
+    pdf.write_bytes(pdf.read_bytes() + b"\n% changed")
+
+    with pytest.raises(ValueError, match="changed, dropped, or reordered"):
+        Pipeline(_settings(), processor=ArrowProcessor()).process(pdf)
+
+    assert md.read_text(encoding="utf-8") == before

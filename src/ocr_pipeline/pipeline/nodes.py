@@ -14,7 +14,13 @@ import structlog
 
 from ..config import Settings
 from ..hashing import md5_of_file
-from ..mdfile import md_path_for, read_instructions, write_md
+from ..mdfile import (
+    md_path_for,
+    read_body,
+    read_instructions,
+    read_recorded_hash,
+    write_md,
+)
 from ..pdfutil import inspect, split_pdf
 from .openai_client import DocumentProcessor, VerificationResult
 
@@ -24,6 +30,8 @@ log = structlog.get_logger(__name__)
 CHUNK_SEPARATOR = "\n\n---\n\n"
 _PAGE_MARKER_RE = re.compile(r"\[PAGE\s+(\d+)\]", re.IGNORECASE)
 _UNCERTAINTY_RE = re.compile(r"\[(?:\?|illegible)\]", re.IGNORECASE)
+_BJ_MARK_RE = re.compile(r"^\[BJ:([^\]\r\n]+)\](?:[ \t]+(.*))?$")
+_BJ_ALLOWED_MARKS = frozenset({"x", ">", "<", "-", "?", "!", "*", "o"})
 
 
 class PipelineState(TypedDict, total=False):
@@ -31,6 +39,8 @@ class PipelineState(TypedDict, total=False):
     work_dir: str
     pdf_hash: str
     instructions: str | None
+    existing_body: str | None
+    reuse_existing: bool
     chunks: list[str]
     ocr_parts: list[str]
     markdown_parts: list[str]
@@ -50,7 +60,22 @@ def validate_node(state: PipelineState, *, settings: Settings) -> PipelineState:
         log.info("using_instructions", pdf=str(pdf_path), chars=len(instructions))
     # Hash the current bytes up front; the write step reuses it so the recorded MD5
     # matches the bytes we actually transcribed.
-    return {"pdf_hash": md5_of_file(pdf_path), "instructions": instructions}
+    pdf_hash = md5_of_file(pdf_path)
+    md_path = md_path_for(pdf_path)
+    existing_body = read_body(md_path)
+    reuse_existing = bool(
+        instructions
+        and read_recorded_hash(md_path) == pdf_hash
+        and existing_body
+    )
+    if reuse_existing:
+        log.info("preserving_existing_markdown", pdf=str(pdf_path))
+    return {
+        "pdf_hash": pdf_hash,
+        "instructions": instructions,
+        "existing_body": existing_body if reuse_existing else None,
+        "reuse_existing": reuse_existing,
+    }
 
 
 def split_node(state: PipelineState, *, settings: Settings) -> PipelineState:
@@ -70,6 +95,8 @@ def split_node(state: PipelineState, *, settings: Settings) -> PipelineState:
 def ocr_node(
     state: PipelineState, *, settings: Settings, processor: DocumentProcessor
 ) -> PipelineState:
+    if state.get("reuse_existing"):
+        return {"ocr_parts": []}
     chunks = state["chunks"]
     instructions = state.get("instructions")
     parts: list[str] = []
@@ -91,6 +118,8 @@ def ocr_node(
 def format_node(
     state: PipelineState, *, settings: Settings, processor: DocumentProcessor
 ) -> PipelineState:
+    if state.get("reuse_existing"):
+        return {"markdown_parts": [state["existing_body"]]}
     if not settings.formatting_enabled:
         return {"markdown_parts": state["ocr_parts"]}
 
@@ -98,17 +127,24 @@ def format_node(
     parts: list[str] = []
     for idx, transcription in enumerate(state["ocr_parts"], start=1):
         log.info("format_chunk", chunk=idx, total=len(state["ocr_parts"]))
-        parts.append(
-            processor.format_markdown(
-                transcription, extra_instructions=instructions
-            )
+        formatted = processor.format_markdown(
+            transcription, extra_instructions=instructions
         )
+        parts.append(render_bullet_journal_blocks(transcription, formatted))
     return {"markdown_parts": parts}
 
 
 def verify_node(
     state: PipelineState, *, settings: Settings, processor: DocumentProcessor
 ) -> PipelineState:
+    if state.get("reuse_existing"):
+        markdown = state["markdown_parts"][0]
+        result = processor.verify(
+            Path(state["pdf_path"]),
+            markdown,
+            extra_instructions=state.get("instructions"),
+        )
+        return {"verified_parts": [apply_line_corrections(markdown, result)]}
     if settings.verify_mode == "off":
         return {"verified_parts": state["markdown_parts"]}
 
@@ -154,6 +190,50 @@ def apply_line_corrections(markdown: str, result: VerificationResult) -> str:
         seen.add(line_number)
         lines[line_number - 1] = correction.replacement
     return "\n".join(lines)
+
+
+def render_bullet_journal_blocks(transcription: str, markdown: str) -> str:
+    """Render protected OCR mark sentinels as stable Markdown tables."""
+    expected = [
+        match.group(1)
+        for line in transcription.splitlines()
+        if (match := _BJ_MARK_RE.fullmatch(line))
+    ]
+    found = [
+        match.group(1)
+        for line in markdown.splitlines()
+        if (match := _BJ_MARK_RE.fullmatch(line))
+    ]
+    invalid = [mark for mark in expected if mark not in _BJ_ALLOWED_MARKS]
+    if invalid:
+        raise ValueError(
+            f"OCR returned invalid Bullet-Journal marks: {', '.join(invalid)}"
+        )
+    if found != expected:
+        raise ValueError(
+            "Markdown formatter changed, dropped, or reordered Bullet-Journal marks"
+        )
+
+    lines = markdown.splitlines()
+    rendered: list[str] = []
+    index = 0
+    while index < len(lines):
+        match = _BJ_MARK_RE.fullmatch(lines[index])
+        if not match:
+            rendered.append(lines[index])
+            index += 1
+            continue
+
+        rendered.extend(["| Mark | Entry |", "| --- | --- |"])
+        while index < len(lines):
+            match = _BJ_MARK_RE.fullmatch(lines[index])
+            if not match:
+                break
+            mark = match.group(1).replace("|", r"\|")
+            entry = (match.group(2) or "").replace("|", r"\|")
+            rendered.append(f"| `{mark}` | {entry} |")
+            index += 1
+    return "\n".join(rendered)
 
 
 def merge_node(state: PipelineState, *, settings: Settings) -> PipelineState:

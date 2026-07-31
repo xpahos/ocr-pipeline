@@ -8,6 +8,7 @@ from ocr_pipeline.mdfile import (
     instructions_hash,
     is_stale,
     md_path_for,
+    read_body,
     read_instructions,
     read_recorded_hash,
     write_md,
@@ -87,6 +88,7 @@ def test_write_md_with_instructions_round_trip(pdf_factory):
     # Header records the instruction hash, and the file is fresh right after writing.
     assert instructions_hash("Treat 'foo' as a header.") in text.splitlines()[0]
     assert is_stale(pdf) is False
+    assert read_body(md) == "body text"
 
 
 def test_read_instructions_none_when_absent(pdf_factory):
