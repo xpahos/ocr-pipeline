@@ -33,10 +33,12 @@ PDF's current bytes.
    PDFs are split into quality-oriented chunks (10 pages by default), each stage streams
    through the Responses API, and the final transcription is written atomically.
 
-   Bullet-Journal signifiers are protected between stages as `[BJ:M]` sentinels. Python,
-   rather than the formatting model, renders consecutive marked entries as the historical
-   `| Mark | Entry |` table. A changed, dropped, reordered, numeric, or arrow-normalized
-   sentinel fails the run before the existing `.md` can be replaced.
+   Bullet-Journal signifiers are protected between stages as `[BJ:M]` sentinels and physical
+   continuation lines as `[BJ-CONT]`. Python, rather than the formatting model, renders them
+   as the historical single `| Mark | Entry |` table, joining an entry's continuation lines
+   with `<br>`. A changed, dropped, reordered, numeric, or arrow-normalized sentinel fails
+   the run before the existing `.md` can be replaced. Internal `[PAGE N]` markers are removed
+   before writing the final Markdown.
 
 Processing is **serial**: at most one OpenAI job runs at a time.
 

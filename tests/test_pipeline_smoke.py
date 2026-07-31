@@ -94,10 +94,7 @@ def test_pipeline_splits_renumbers_and_merges(pdf_factory):
     assert processor.ocr_calls > 1
     text = md_path.read_text(encoding="utf-8")
     assert CHUNK_SEPARATOR in text
-    assert "[PAGE 1]" in text
-    assert "[PAGE 3]" in text
-    assert "[PAGE 5]" in text
-    assert "[PAGE 7]" in text
+    assert "[PAGE " not in text
     assert read_recorded_hash(md_path) == md5_of_file(pdf)
 
 
@@ -183,15 +180,26 @@ def test_line_corrections_reject_invalid_or_duplicate_lines():
 
 
 def test_bullet_journal_marks_are_rendered_deterministically():
-    transcription = "[PAGE 1]\n[BJ:>] moved\n[BJ:o] event\n\nnormal"
-    formatted = "[PAGE 1]\n[BJ:>] moved\n[BJ:o] event\n\nnormal"
+    transcription = (
+        "[PAGE 1]\n"
+        "[BJ:>] moved\n"
+        "[BJ-CONT] continuation one\n"
+        "[BJ-CONT] continuation two\n"
+        "[BJ:o] event\n\n"
+        "normal"
+    )
+    formatted = transcription
 
     result = render_bullet_journal_blocks(transcription, formatted)
 
-    assert "| `>` | moved |" in result
+    assert result.count("| Mark | Entry |") == 1
+    assert (
+        "| `>` | moved<br>continuation one<br>continuation two |" in result
+    )
     assert "| `o` | event |" in result
     assert "→" not in result
     assert "[BJ:" not in result
+    assert "[BJ-CONT]" not in result
 
 
 def test_bullet_journal_mark_changes_fail_before_write():
@@ -201,6 +209,8 @@ def test_bullet_journal_mark_changes_fail_before_write():
         render_bullet_journal_blocks("[BJ:>] moved", "[BJ:→] moved")
     with pytest.raises(ValueError, match="invalid Bullet-Journal marks"):
         render_bullet_journal_blocks("[BJ:1] item", "[BJ:1] item")
+    with pytest.raises(ValueError, match="continuation has no preceding"):
+        render_bullet_journal_blocks("[BJ-CONT] orphan", "[BJ-CONT] orphan")
 
 
 def test_formatter_regression_cannot_overwrite_existing_markdown(pdf_factory):

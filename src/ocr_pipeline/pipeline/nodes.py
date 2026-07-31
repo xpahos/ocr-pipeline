@@ -31,6 +31,7 @@ CHUNK_SEPARATOR = "\n\n---\n\n"
 _PAGE_MARKER_RE = re.compile(r"\[PAGE\s+(\d+)\]", re.IGNORECASE)
 _UNCERTAINTY_RE = re.compile(r"\[(?:\?|illegible)\]", re.IGNORECASE)
 _BJ_MARK_RE = re.compile(r"^\[BJ:([^\]\r\n]+)\](?:[ \t]+(.*))?$")
+_BJ_CONT_RE = re.compile(r"^\[BJ-CONT\](?:[ \t]+(.*))?$")
 _BJ_ALLOWED_MARKS = frozenset({"x", ">", "<", "-", "?", "!", "*", "o"})
 
 
@@ -194,17 +195,23 @@ def apply_line_corrections(markdown: str, result: VerificationResult) -> str:
 
 def render_bullet_journal_blocks(transcription: str, markdown: str) -> str:
     """Render protected OCR mark sentinels as stable Markdown tables."""
-    expected = [
-        match.group(1)
-        for line in transcription.splitlines()
-        if (match := _BJ_MARK_RE.fullmatch(line))
+    def sentinel_sequence(text: str) -> list[str]:
+        sequence: list[str] = []
+        for line in text.splitlines():
+            if match := _BJ_MARK_RE.fullmatch(line):
+                sequence.append(f"mark:{match.group(1)}")
+            elif _BJ_CONT_RE.fullmatch(line):
+                sequence.append("continuation")
+        return sequence
+
+    expected = sentinel_sequence(transcription)
+    found = sentinel_sequence(markdown)
+    invalid = [
+        token.removeprefix("mark:")
+        for token in expected
+        if token.startswith("mark:")
+        and token.removeprefix("mark:") not in _BJ_ALLOWED_MARKS
     ]
-    found = [
-        match.group(1)
-        for line in markdown.splitlines()
-        if (match := _BJ_MARK_RE.fullmatch(line))
-    ]
-    invalid = [mark for mark in expected if mark not in _BJ_ALLOWED_MARKS]
     if invalid:
         raise ValueError(
             f"OCR returned invalid Bullet-Journal marks: {', '.join(invalid)}"
@@ -224,20 +231,35 @@ def render_bullet_journal_blocks(transcription: str, markdown: str) -> str:
             index += 1
             continue
 
-        rendered.extend(["| Mark | Entry |", "| --- | --- |"])
+        rendered.extend(["| Mark | Entry |", "|---|---|"])
         while index < len(lines):
             match = _BJ_MARK_RE.fullmatch(lines[index])
             if not match:
                 break
             mark = match.group(1).replace("|", r"\|")
-            entry = (match.group(2) or "").replace("|", r"\|")
-            rendered.append(f"| `{mark}` | {entry} |")
+            entry_lines = [(match.group(2) or "").replace("|", r"\|")]
             index += 1
+            while index < len(lines):
+                continuation = _BJ_CONT_RE.fullmatch(lines[index])
+                if not continuation:
+                    break
+                entry_lines.append(
+                    (continuation.group(1) or "").replace("|", r"\|")
+                )
+                index += 1
+            rendered.append(f"| `{mark}` | {'<br>'.join(entry_lines)} |")
+
+    if any(_BJ_CONT_RE.fullmatch(line) for line in rendered):
+        raise ValueError("Bullet-Journal continuation has no preceding marked entry")
     return "\n".join(rendered)
 
 
 def merge_node(state: PipelineState, *, settings: Settings) -> PipelineState:
-    parts = [p.strip() for p in state["verified_parts"] if p.strip()]
+    parts = [
+        _PAGE_MARKER_RE.sub("", p).strip()
+        for p in state["verified_parts"]
+        if p.strip()
+    ]
     return {"body": CHUNK_SEPARATOR.join(parts)}
 
 
